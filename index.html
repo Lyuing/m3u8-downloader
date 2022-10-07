@@ -925,7 +925,8 @@ new Vue({
     },
 
     // 格式化时间
-    formatTime(date=new Date(), formatStr) {
+    formatTime(date, formatStr) {
+      date = date || new Date()
       const formatType = {
         Y: date.getFullYear(),
         M: date.getMonth() + 1,
