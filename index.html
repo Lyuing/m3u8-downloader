@@ -345,6 +345,30 @@
     opacity: 0.9;
   }
 
+  .file-box{
+    width: 100px;
+    height: 100px;
+    position: relative;
+    margin: auto;
+  }
+  .file-box::before{
+    content: '';
+    display: block;
+    width: 100%;
+    height: 100%;
+    border-radius: 4px;
+    border: 1px dotted #999;
+    background: #fff;
+    position: absolute;
+    top: 0;
+    left: 0;
+  }
+  .input{
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+  }
+
   </style>
 </head>
 
@@ -376,6 +400,10 @@
   </a>
 
   <!--文件载入-->
+  <!-- <input type="file" ref="fileInput"> -->
+  <div class="file-box">
+    <input class="input" type="file" ref="fileInput" draggable/>
+  </div>
   <div class="m-p-temp-url">测试链接：http://1257120875.vod2.myqcloud.com/0ef121cdvodtransgzp1257120875/3055695e5285890780828799271/v.f230.m3u8</div>
   <section class="m-p-input-container">
     <input type="text" v-model="url" :disabled="downloading" placeholder="请输入 m3u8 链接">
@@ -587,11 +615,29 @@ new Vue({
       this.getM3U8()
     },
 
+    // 解析 m3u8 文件
+    waitReader (file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader()// 新建一个FileReader
+        reader.readAsText(file, 'UTF-8')// 读取文件
+        reader.onload = function (evt) { // 读取完文件之后会回来这里 这是个异步
+          const fileString = evt.target.result // 读取文件内容
+          fileString ? resolve(fileString) : reject(evt)
+        }
+      })
+    },
+
     // 获取在线文件
-    getM3U8(onlyGetRange) {
+    async getM3U8(onlyGetRange) {
       if (!this.url) {
-        alert('请输入链接')
-        return
+        let input = this.$refs.fileInput
+        if(!input.value){
+          alert('请输入链接')
+          return
+        }
+        const fileRes = await this.waitReader(input.files[0])
+        return this.handleM3u8Str(fileRes, onlyGetRange)
+        // console.log(input.files[0])
       }
       if (this.url.toLowerCase().indexOf('.m3u8') === -1) {
         alert('链接有误，请重新输入')
@@ -620,76 +666,79 @@ new Vue({
       this.ajax({
         url: this.url,
         success: (m3u8Str) => {
-          this.tsUrlList = []
-          this.finishList = []
-
-          // 提取 ts 视频片段地址
-          m3u8Str.split('\n').forEach((item) => {
-            if (item.toLowerCase().indexOf('.ts') > -1 || item.toLowerCase().indexOf('.image') > -1) {
-              this.tsUrlList.push(this.applyURL(item, this.url))
-              this.finishList.push({
-                title: item,
-                status: ''
-              })
-            }
-          })
-
-          // 仅获取视频片段数
-          if (onlyGetRange) {
-            this.rangeDownload.isShowRange = true
-            this.rangeDownload.endSegment = this.tsUrlList.length
-            this.rangeDownload.targetSegment = this.tsUrlList.length
-            return
-          } else {
-            let startSegment = Math.max(this.rangeDownload.startSegment || 1, 1) // 最小为 1
-            let endSegment = Math.max(this.rangeDownload.endSegment || this.tsUrlList.length, 1)
-            startSegment = Math.min(startSegment, this.tsUrlList.length) // 最大为 this.tsUrlList.length
-            endSegment = Math.min(endSegment, this.tsUrlList.length)
-            this.rangeDownload.startSegment = Math.min(startSegment, endSegment)
-            this.rangeDownload.endSegment = Math.max(startSegment, endSegment)
-            this.rangeDownload.targetSegment = this.rangeDownload.endSegment - this.rangeDownload.startSegment + 1
-            this.downloadIndex = this.rangeDownload.startSegment - 1
-            this.downloading = true
-          }
-
-          // 获取需要下载的 MP4 视频长度
-          if (this.isGetMP4) {
-            let infoIndex = 0
-            m3u8Str.split('\n').forEach(item => {
-              if (item.toUpperCase().indexOf('#EXTINF:') > -1) { // 计算视频总时长，设置 mp4 信息时使用
-                infoIndex++
-                if (this.rangeDownload.startSegment <= infoIndex && infoIndex <= this.rangeDownload.endSegment) {
-                  this.durationSecond += parseFloat(item.split('#EXTINF:')[1])
-                }
-              }
-            })
-          }
-
-          // 检测视频 AES 加密
-          if (m3u8Str.indexOf('#EXT-X-KEY') > -1) {
-            this.aesConf.method = (m3u8Str.match(/(.*METHOD=([^,\s]+))/) || ['', '', ''])[2]
-            this.aesConf.uri = (m3u8Str.match(/(.*URI="([^"]+))"/) || ['', '', ''])[2]
-            this.aesConf.iv = (m3u8Str.match(/(.*IV=([^,\s]+))/) || ['', '', ''])[2]
-            this.aesConf.iv = this.aesConf.iv ? this.aesConf.stringToBuffer(this.aesConf.iv) : ''
-            this.aesConf.uri = this.applyURL(this.aesConf.uri, this.url)
-
-            // let params = m3u8Str.match(/#EXT-X-KEY:([^,]*,?METHOD=([^,]+))?([^,]*,?URI="([^,]+)")?([^,]*,?IV=([^,^\n]+))?/)
-            // this.aesConf.method = params[2]
-            // this.aesConf.uri = this.applyURL(params[4], this.url)
-            // this.aesConf.iv = params[6] ? this.aesConf.stringToBuffer(params[6]) : ''
-            this.getAES();
-          } else if (this.tsUrlList.length > 0) { // 如果视频没加密，则直接下载片段，否则先下载秘钥
-            this.downloadTS()
-          } else {
-            this.alertError('资源为空，请查看链接是否有效')
-          }
+          this.handleM3u8Str(m3u8Str, onlyGetRange)
         },
         fail: () => {
           this.alertError('链接不正确，请查看链接是否有效')
         }
       })
     },
+    // 操作m3u8 内容
+    handleM3u8Str(m3u8Str, onlyGetRange){
+      this.tsUrlList = []
+      this.finishList = []
 
+      // 提取 ts 视频片段地址
+      m3u8Str.split('\n').forEach((item) => {
+        if (item.toLowerCase().indexOf('.ts') > -1 || item.toLowerCase().indexOf('.image') > -1) {
+          this.tsUrlList.push(this.applyURL(item, this.url))
+          this.finishList.push({
+            title: item,
+            status: ''
+          })
+        }
+      })
+
+      // 仅获取视频片段数
+      if (onlyGetRange) {
+        this.rangeDownload.isShowRange = true
+        this.rangeDownload.endSegment = this.tsUrlList.length
+        this.rangeDownload.targetSegment = this.tsUrlList.length
+        return
+      } else {
+        let startSegment = Math.max(this.rangeDownload.startSegment || 1, 1) // 最小为 1
+        let endSegment = Math.max(this.rangeDownload.endSegment || this.tsUrlList.length, 1)
+        startSegment = Math.min(startSegment, this.tsUrlList.length) // 最大为 this.tsUrlList.length
+        endSegment = Math.min(endSegment, this.tsUrlList.length)
+        this.rangeDownload.startSegment = Math.min(startSegment, endSegment)
+        this.rangeDownload.endSegment = Math.max(startSegment, endSegment)
+        this.rangeDownload.targetSegment = this.rangeDownload.endSegment - this.rangeDownload.startSegment + 1
+        this.downloadIndex = this.rangeDownload.startSegment - 1
+        this.downloading = true
+      }
+
+      // 获取需要下载的 MP4 视频长度
+      if (this.isGetMP4) {
+        let infoIndex = 0
+        m3u8Str.split('\n').forEach(item => {
+          if (item.toUpperCase().indexOf('#EXTINF:') > -1) { // 计算视频总时长，设置 mp4 信息时使用
+            infoIndex++
+            if (this.rangeDownload.startSegment <= infoIndex && infoIndex <= this.rangeDownload.endSegment) {
+              this.durationSecond += parseFloat(item.split('#EXTINF:')[1])
+            }
+          }
+        })
+      }
+
+      // 检测视频 AES 加密
+      if (m3u8Str.indexOf('#EXT-X-KEY') > -1) {
+        this.aesConf.method = (m3u8Str.match(/(.*METHOD=([^,\s]+))/) || ['', '', ''])[2]
+        this.aesConf.uri = (m3u8Str.match(/(.*URI="([^"]+))"/) || ['', '', ''])[2]
+        this.aesConf.iv = (m3u8Str.match(/(.*IV=([^,\s]+))/) || ['', '', ''])[2]
+        this.aesConf.iv = this.aesConf.iv ? this.aesConf.stringToBuffer(this.aesConf.iv) : ''
+        this.aesConf.uri = this.applyURL(this.aesConf.uri, this.url)
+
+        // let params = m3u8Str.match(/#EXT-X-KEY:([^,]*,?METHOD=([^,]+))?([^,]*,?URI="([^,]+)")?([^,]*,?IV=([^,^\n]+))?/)
+        // this.aesConf.method = params[2]
+        // this.aesConf.uri = this.applyURL(params[4], this.url)
+        // this.aesConf.iv = params[6] ? this.aesConf.stringToBuffer(params[6]) : ''
+        this.getAES();
+      } else if (this.tsUrlList.length > 0) { // 如果视频没加密，则直接下载片段，否则先下载秘钥
+        this.downloadTS()
+      } else {
+        this.alertError('资源为空，请查看链接是否有效')
+      }
+    },
     // 获取AES配置
     getAES() {
       alert('视频被 AES 加密，点击确认，进行视频解码')
@@ -876,7 +925,7 @@ new Vue({
     },
 
     // 格式化时间
-    formatTime(date, formatStr) {
+    formatTime(date=new Date(), formatStr) {
       const formatType = {
         Y: date.getFullYear(),
         M: date.getMonth() + 1,
